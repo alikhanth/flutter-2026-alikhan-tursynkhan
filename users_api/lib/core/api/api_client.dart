@@ -6,22 +6,37 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import '../storage/secure_store.dart';
 import 'api_exception.dart';
 
 class ApiClient {
-  ApiClient(this._client, {this.host = 'jsonplaceholder.typicode.com'});
+  ApiClient(
+    this._client,
+    this._store, {
+    this.host = 'jsonplaceholder.typicode.com',
+  });
 
   final http.Client _client;
+  final SecureStore _store;
   final String host;
 
-  Map<String, String> get _headers => const {'Accept': 'application/json'};
+  Future<Map<String, String>> _headers([Map<String, String>? extra]) async {
+    return {
+      'Accept': 'application/json',
+      if (await _store.readToken() case final t?) 'Authorization': 'Bearer $t',
+      ...?extra,
+    };
+  }
 
   Future<dynamic> get(
     String path, {
     Map<String, String>? queryParameters,
   }) async {
     final uri = Uri.https(host, path, queryParameters);
-    final response = await _send(() => _client.get(uri, headers: _headers));
+    final headers = await _headers();
+
+    final response = await _send(() => _client.get(uri, headers: headers));
+
     _check(response);
     return _decode(response);
   }
@@ -32,13 +47,12 @@ class ApiClient {
     int expectedStatus = 201,
   }) async {
     final uri = Uri.https(host, path);
+    final headers = await _headers({'Content-Type': 'application/json'});
+
     final response = await _send(
-      () => _client.post(
-        uri,
-        headers: {..._headers, 'Content-Type': 'application/json'},
-        body: jsonEncode(body),
-      ),
+      () => _client.post(uri, headers: headers, body: jsonEncode(body)),
     );
+
     _check(response, expectedStatus: expectedStatus);
     return _decode(response);
   }
@@ -46,12 +60,15 @@ class ApiClient {
   Future<http.Response> _send(Future<http.Response> Function() call) async {
     try {
       final response = await call().timeout(const Duration(seconds: 10));
+
       if (kDebugMode) {
         log(
-          '${response.request?.method} ${response.request?.url} -> ${response.statusCode}',
+          '${response.request?.method} '
+          '${response.request?.url} -> ${response.statusCode}',
           name: 'api',
         );
       }
+
       return response;
     } on SocketException {
       throw const NoConnectionException();
@@ -66,17 +83,21 @@ class ApiClient {
     if (r.statusCode == 401) {
       throw const UnauthorizedException();
     }
+
     if (r.statusCode == 404) {
       throw const NotFoundException();
     }
+
     if (r.statusCode >= 500) {
       throw ServerException(r.statusCode);
     }
+
     if (expectedStatus != null && r.statusCode != expectedStatus) {
       throw BadResponseException(
         'Expected HTTP $expectedStatus, got ${r.statusCode}',
       );
     }
+
     if (r.statusCode >= 400) {
       throw BadResponseException('HTTP ${r.statusCode}');
     }

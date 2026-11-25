@@ -22,7 +22,6 @@ class UnauthorizedException extends ApiException {
   const UnauthorizedException();
 }
 
-// JSON we could not read: a bug report, not a Retry
 class BadResponseException extends ApiException {
   const BadResponseException([this.detail]);
   final String? detail;

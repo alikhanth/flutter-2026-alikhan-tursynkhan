@@ -1,13 +1,15 @@
 import '../../core/api/api_client.dart';
 import '../../core/api/api_exception.dart';
 import 'user.dart';
+import 'users_cache.dart';
 
 class UserRepository {
-  UserRepository(this._api);
+  UserRepository(this._api, this._cache);
 
   final ApiClient _api;
+  final UsersCache _cache;
 
-  Future<List<User>> getAll() async {
+  Future<List<User>> _fetch() async {
     final data = await _api.get('/users');
     try {
       final list = data as List<dynamic>;
@@ -18,6 +20,18 @@ class UserRepository {
       throw BadResponseException('users: $e');
     } on FormatException catch (e) {
       throw BadResponseException('users: $e');
+    }
+  }
+
+  Future<({List<User> items, bool fromCache})> getAll() async {
+    try {
+      final fresh = await _fetch();
+      await _cache.save(fresh);
+      return (items: fresh, fromCache: false);
+    } on NoConnectionException {
+      final saved = await _cache.load();
+      if (saved == null) rethrow;
+      return (items: saved, fromCache: true);
     }
   }
 

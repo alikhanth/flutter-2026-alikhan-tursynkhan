@@ -1,7 +1,14 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/api/api_exception.dart';
+import '../auth/auth_model.dart';
+import '../profile/profile_screen.dart';
+import '../settings/settings_model.dart';
+import '../settings/settings_screen.dart';
 import 'user.dart';
 import 'users_model.dart';
 
@@ -11,9 +18,36 @@ class UsersScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = context.watch<UsersModel>();
+    final cityFilter = context.watch<SettingsModel>().city;
+
+    final filteredUsers = cityFilter == null
+        ? m.items
+        : m.items.where((u) => u.address.city == cityFilter).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Users')),
+      appBar: AppBar(
+        title: Text(cityFilter == null ? 'Users' : 'Users · $cityFilter'),
+        actions: [
+          IconButton(
+            tooltip: 'Profile',
+            icon: const Icon(Icons.account_circle_outlined),
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const ProfileScreen()),
+              );
+            },
+          ),
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () async {
+              await Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+              );
+            },
+          ),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: () async {
           await Navigator.of(context).push(
@@ -23,19 +57,41 @@ class UsersScreen extends StatelessWidget {
         tooltip: 'New user',
         child: const Icon(Icons.add),
       ),
-      body: _buildBody(context, m),
+      body: _buildBody(context, m, filteredUsers),
     );
   }
 
-  Widget _buildBody(BuildContext context, UsersModel m) {
+  Widget _buildBody(
+    BuildContext context,
+    UsersModel m,
+    List<User> visibleUsers,
+  ) {
     if (m.loading) {
       return const LoadingView();
     }
 
     return switch (m.error) {
-      null => RefreshIndicator(
-        onRefresh: m.load,
-        child: UserList(users: m.items),
+      null => Column(
+        children: [
+          if (m.fromCache)
+            MaterialBanner(
+              backgroundColor: Theme.of(context).colorScheme.tertiaryContainer,
+              leading: const Icon(Icons.offline_bolt_outlined),
+              content: const Text('Saved data · no connection · Retry'),
+              actions: [
+                TextButton(
+                  onPressed: () async => m.load(),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: m.load,
+              child: UserList(users: visibleUsers),
+            ),
+          ),
+        ],
       ),
       NoConnectionException() => OfflineView(onRetry: m.load),
       NotFoundException() => RequestErrorView(
@@ -250,9 +306,18 @@ class UserDetailScreen extends StatelessWidget {
 
   final User user;
 
+  Future<void> _openUri(BuildContext context, Uri uri) async {
+    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('No app can open this')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final website = user.website;
+    final token = context.watch<AuthModel>().token;
 
     return Scaffold(
       appBar: AppBar(title: Text(user.name)),
@@ -268,18 +333,35 @@ class UserDetailScreen extends StatelessWidget {
             leading: const Icon(Icons.email_outlined),
             title: const Text('Email'),
             subtitle: Text(user.email),
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () async =>
+                _openUri(context, Uri(scheme: 'mailto', path: user.email)),
           ),
           ListTile(
             leading: const Icon(Icons.phone_outlined),
             title: const Text('Phone'),
             subtitle: Text('${user.phone} (digits: ${user.phoneDigits})'),
-            onTap: () {}, // Wired to url_launcher in Practice 12
+            trailing: const Icon(Icons.open_in_new, size: 18),
+            onTap: () async =>
+                _openUri(context, Uri(scheme: 'tel', path: user.phoneDigits)),
           ),
           ListTile(
             leading: const Icon(Icons.language_outlined),
             title: const Text('Website'),
             subtitle: Text(website ?? 'Not provided'),
-            onTap: website == null ? null : () {}, // Wired in Practice 12
+            trailing: website == null
+                ? null
+                : const Icon(Icons.open_in_new, size: 18),
+            onTap: website == null
+                ? null
+                : () async {
+                    final raw =
+                        website.startsWith('http://') ||
+                            website.startsWith('https://')
+                        ? website
+                        : 'https://$website';
+                    await _openUri(context, Uri.parse(raw));
+                  },
           ),
           const Divider(),
           ListTile(
@@ -297,6 +379,23 @@ class UserDetailScreen extends StatelessWidget {
             title: Text(user.company.name),
             subtitle: Text(user.company.catchPhrase),
           ),
+          if (kDebugMode && token != null) ...[
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: OutlinedButton.icon(
+                onPressed: () async {
+                  await Clipboard.setData(ClipboardData(text: token));
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Token copied to clipboard')),
+                  );
+                },
+                icon: const Icon(Icons.copy),
+                label: const Text('Copy token to clipboard'),
+              ),
+            ),
+          ],
         ],
       ),
     );
